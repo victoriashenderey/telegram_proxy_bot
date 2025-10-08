@@ -89,39 +89,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик для не-текстовых сообщений"""
-    if update.effective_user.id != ADMIN_USER_ID:
+    if update.effective_user and update.effective_user.id != ADMIN_USER_ID:
         await update.message.reply_text("❌ Бот принимает только текстовые сообщения.")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Update {update} caused error: {context.error}")
+    logger.error(f"Exception while handling an update: {context.error}")
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
+    try:
+        # Создаем приложение с явным указанием конфигурации
+        application = Application.builder().token(BOT_TOKEN).build()
 
-    # Обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.ALL & ~filters.TEXT & ~filters.COMMAND, handle_non_text))
-    application.add_error_handler(error_handler)
+        # Обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.ALL & ~filters.TEXT & ~filters.COMMAND, handle_non_text))
+        application.add_error_handler(error_handler)
 
-    # Определяем режим запуска
-    if RENDER_EXTERNAL_HOSTNAME or WEBHOOK_URL:
-        # Production: Render.com
-        webhook_url = WEBHOOK_URL if WEBHOOK_URL else f"https://{RENDER_EXTERNAL_HOSTNAME}/{BOT_TOKEN}"
-        
-        logger.info(f"Starting webhook on port {PORT}: {webhook_url}")
-        
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,  # ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ
-            webhook_url=webhook_url,
-            secret_token=None,
-        )
-    else:
-        # Локальная разработка
-        logger.info("Starting polling locally...")
-        application.run_polling()
+        # Определяем режим запуска
+        if RENDER_EXTERNAL_HOSTNAME or WEBHOOK_URL:
+            # Production: Render.com
+            webhook_url = WEBHOOK_URL if WEBHOOK_URL else f"https://{RENDER_EXTERNAL_HOSTNAME}/{BOT_TOKEN}"
+            
+            logger.info(f"Starting webhook on port {PORT}: {webhook_url}")
+            
+            # Запускаем webhook с правильными параметрами
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                url_path=BOT_TOKEN,
+                webhook_url=webhook_url,
+                secret_token=None,
+            )
+        else:
+            # Локальная разработка
+            logger.info("Starting polling locally...")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+            
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
