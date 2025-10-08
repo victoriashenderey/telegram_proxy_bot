@@ -1,7 +1,7 @@
 import os
 import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # === Настройки из переменных окружения ===
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -11,12 +11,6 @@ ADMIN_USER_ID = int(os.environ["ADMIN_USER_ID"])
 RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 PORT = int(os.environ.get("PORT", 10000))
 
-# Автоматическое формирование webhook URL для Render
-if RENDER_EXTERNAL_HOSTNAME:
-    WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}/{BOT_TOKEN}"
-else:
-    WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
-
 # Хранилище состояний пользователей
 user_states = {}
 logging.basicConfig(
@@ -25,11 +19,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Напишите сообщение — оно будет отправлено администратору.")
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Привет! Напишите сообщение — оно будет отправлено администратору.")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Игнорируем служебные сообщения
+def handle_message(update: Update, context: CallbackContext):
     if not update.message or not update.message.text:
         return
         
@@ -39,7 +32,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id == ADMIN_USER_ID:
         # Админ должен ответить на пересланное сообщение
         if not update.message.reply_to_message:
-            await update.message.reply_text("❌ Ответьте на сообщение пользователя, чтобы отправить ответ.")
+            update.message.reply_text("❌ Ответьте на сообщение пользователя, чтобы отправить ответ.")
             return
 
         # Ищем пользователя по ID сообщения
@@ -50,18 +43,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
 
         if not target_user_id:
-            await update.message.reply_text("❌ Не удалось найти пользователя для этого сообщения.")
+            update.message.reply_text("❌ Не удалось найти пользователя для этого сообщения.")
             return
 
         try:
-            await context.bot.send_message(
+            context.bot.send_message(
                 chat_id=target_user_id,
                 text=f"📨 Ответ от администратора:\n\n{update.message.text}"
             )
-            await update.message.reply_text("✅ Ответ отправлен пользователю!")
+            update.message.reply_text("✅ Ответ отправлен пользователю!")
         except Exception as e:
-            logger.error(f"Ошибка отправки админу: {e}")
-            await update.message.reply_text("❌ Не удалось отправить сообщение.")
+            logger.error(f"Ошибка отправки: {e}")
+            update.message.reply_text("❌ Не удалось отправить сообщение.")
 
     else:
         # Обычный пользователь — пересылаем админу
@@ -70,7 +63,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_info = f"👤 От: @{username} (ID: {user_id})"
             message_text = f"{user_info}\n\n💬 Сообщение:\n{update.message.text}"
 
-            sent_message = await context.bot.send_message(
+            sent_message = context.bot.send_message(
                 chat_id=ADMIN_USER_ID,
                 text=message_text
             )
@@ -81,51 +74,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "username": username
             }
 
-            await update.message.reply_text("✅ Ваше сообщение отправлено администратору! Ожидайте ответа.")
+            update.message.reply_text("✅ Ваше сообщение отправлено администратору! Ожидайте ответа.")
             
         except Exception as e:
             logger.error(f"Ошибка пересылки админу: {e}")
-            await update.message.reply_text("❌ Произошла ошибка при отправке.")
+            update.message.reply_text("❌ Произошла ошибка при отправке.")
 
-async def handle_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_non_text(update: Update, context: CallbackContext):
     """Обработчик для не-текстовых сообщений"""
     if update.effective_user and update.effective_user.id != ADMIN_USER_ID:
-        await update.message.reply_text("❌ Бот принимает только текстовые сообщения.")
+        update.message.reply_text("❌ Бот принимает только текстовые сообщения.")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def error_handler(update: Update, context: CallbackContext):
     logger.error(f"Exception while handling an update: {context.error}")
 
 def main():
     try:
-        # Создаем приложение с явным указанием конфигурации
-        application = Application.builder().token(BOT_TOKEN).build()
+        # Используем Updater для версии 13.15
+        updater = Updater(BOT_TOKEN, use_context=True)
+        dispatcher = updater.dispatcher
 
         # Обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(MessageHandler(filters.ALL & ~filters.TEXT & ~filters.COMMAND, handle_non_text))
-        application.add_error_handler(error_handler)
+        dispatcher.add_handler(CommandHandler("start", start))
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+        dispatcher.add_handler(MessageHandler(Filters.all & ~Filters.text & ~Filters.command, handle_non_text))
+        dispatcher.add_error_handler(error_handler)
 
         # Определяем режим запуска
-        if RENDER_EXTERNAL_HOSTNAME or WEBHOOK_URL:
-            # Production: Render.com
-            webhook_url = WEBHOOK_URL if WEBHOOK_URL else f"https://{RENDER_EXTERNAL_HOSTNAME}/{BOT_TOKEN}"
+        if RENDER_EXTERNAL_HOSTNAME:
+            # Production: Render.com с webhook
+            webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{BOT_TOKEN}"
             
             logger.info(f"Starting webhook on port {PORT}: {webhook_url}")
             
-            # Запускаем webhook с правильными параметрами
-            application.run_webhook(
+            updater.start_webhook(
                 listen="0.0.0.0",
                 port=PORT,
                 url_path=BOT_TOKEN,
-                webhook_url=webhook_url,
-                secret_token=None,
+                webhook_url=webhook_url
             )
+            logger.info("Webhook started successfully!")
         else:
-            # Локальная разработка
+            # Локальная разработка с polling
             logger.info("Starting polling locally...")
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
+            updater.start_polling()
+            logger.info("Polling started successfully!")
             
+        updater.idle()
+        
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         raise
